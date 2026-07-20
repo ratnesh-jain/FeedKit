@@ -196,6 +196,7 @@ struct DateTests {
     let formatter: FeedDateFormatter = .init(spec: .rfc1123)
     let dateStrings = [
       "Fri, 06 Sep 2024 12:34:56 GMT",
+      "Fri, 06 Sep 2024 12:34:56 +0000",
       "Fri, 06 Sep 2024"
     ]
 

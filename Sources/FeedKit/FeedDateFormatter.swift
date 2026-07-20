@@ -72,12 +72,23 @@ class PermissiveDateFormatter: DateFormatter, @unchecked Sendable {
       }
     }
 
-    for format in dateFormats + permissiveDateFormats {
-      dateFormat = format
-      if let date = super.date(from: trimmedString) {
+    if let date = firstMatch(for: trimmedString, formats: dateFormats + permissiveDateFormats) {
+      return date
+    }
+
+    // Some feeds use non-standard weekday abbreviations (e.g. "Tues", "Thur")
+    // that DateFormatter rejects outright even though the weekday is
+    // redundant information for parsing purposes. If the string looks like
+    // "<weekday>, <rest>", strip the weekday and retry every format again.
+    // This also rescues strings whose weekday-carrying formats didn't
+    // anticipate a trailing numeric offset, since the stripped remainder
+    // gets a fresh shot at every format, not just the ones without "EEE".
+    if let stripped = Self.strippingLeadingWeekday(from: trimmedString), stripped != trimmedString {
+      if let date = firstMatch(for: stripped, formats: dateFormats + permissiveDateFormats) {
         return date
       }
     }
+
     return nil
   }
 
@@ -91,6 +102,40 @@ class PermissiveDateFormatter: DateFormatter, @unchecked Sendable {
       }
     }
     return ""
+  }
+
+  // MARK: Private
+
+  /// Matches a regex for a leading weekday, e.g. "Sun, ", "Tues, ", "Thursday, ".
+  private static let leadingWeekdayRegEx = try! NSRegularExpression(
+    pattern: "^[a-zA-Z]+, ([\\w :+-]+)$"
+  )
+
+  /// Tries each format in order against `string`, returning the first successful parse.
+  private func firstMatch(for string: String, formats: [String]) -> Date? {
+    for format in formats {
+      dateFormat = format
+      if let date = super.date(from: string) {
+        return date
+      }
+    }
+    return nil
+  }
+
+  /// Returns `string` with a leading "<weekday>, " prefix removed, or `nil` if no
+  /// such prefix is present. Uses a proper UTF-16-based NSRange so this is safe
+  /// for strings containing non-ASCII characters.
+  private static func strippingLeadingWeekday(from string: String) -> String? {
+    let range = NSRange(string.startIndex..., in: string)
+    guard leadingWeekdayRegEx.firstMatch(in: string, options: [], range: range) != nil else {
+      return nil
+    }
+    return leadingWeekdayRegEx.stringByReplacingMatches(
+      in: string,
+      options: [],
+      range: range,
+      withTemplate: "$1"
+    )
   }
 }
 
@@ -145,66 +190,47 @@ final class RFC3339DateFormatter: PermissiveDateFormatter, @unchecked Sendable {
 
 /// Formatter for RFC822 date specification with backup formats.
 final class RFC822DateFormatter: PermissiveDateFormatter, @unchecked Sendable {
-  // MARK: Internal
-
   /// List of date formats supported for RFC822.
+  ///
+  /// Each "named zone" variant (`zzz`, e.g. "GMT", "UTC") is paired with a
+  /// "numeric offset" variant (`Z`, e.g. "+0000", "-0800"), since real-world
+  /// feeds overwhelmingly use the numeric form and `zzz` will not parse it.
   override var dateFormats: [String] {
     [
-      // RFC 822/1123 format with seconds.
+      // RFC 822/1123 format with seconds, named time zone.
       "EEE, d MMM yyyy HH:mm:ss zzz",
-      // RFC 822/1123 format without seconds.
+      "EEE,d MMM yyyy HH:mm:ss zzz",
+      // RFC 822/1123 format with seconds, numeric offset.
+      "EEE, d MMM yyyy HH:mm:ss Z",
+      // RFC 822/1123 format without seconds, named time zone.
       "EEE, d MMM yyyy HH:mm zzz",
-      // RFC 822 compatible, includes day, month, year, time, and timezone.
+      // RFC 822/1123 format without seconds, numeric offset.
+      "EEE, d MMM yyyy HH:mm Z",
+      // RFC 822 compatible, day/month/year/time/zone, no weekday, named zone.
       "d MMM yyyy HH:mm:ss zzz",
-      // RFC 822 compatible, similar to above but without seconds.
+      // RFC 822 compatible, no weekday, numeric offset.
+      "d MMM yyyy HH:mm:ss Z",
+      // RFC 822 compatible, similar to above but without seconds, named zone.
       "d MMM yyyy HH:mm zzz",
-      // RFC 822 compatible, includes weekday, day, month, year, time, and timezone.
-      "EEE, dd MMM yyyy, HH:mm:ss zzz"
+      // RFC 822 compatible, without seconds, numeric offset.
+      "d MMM yyyy HH:mm Z",
+      // RFC 822 compatible, weekday/day/month/year/time/zone, named zone.
+      "EEE, dd MMM yyyy, HH:mm:ss zzz",
+      // RFC 822 compatible, weekday variant, numeric offset.
+      "EEE, dd MMM yyyy, HH:mm:ss Z",
+      "EEE,dd MMM yyyy, HH:mm:ss Z",
     ]
   }
 
   /// Backup date formats to handle potential parsing issues.
   override var permissiveDateFormats: [String] {
     [
-      // Non-standard, similar to RFC 822 with numeric timezone.
-      "d MMM yyyy HH:mm:ss Z",
       // Non-standard, ISO-like format with numeric timezone.
       "yyyy-MM-dd HH:mm:ss Z",
       // Non-standard format with both numeric and named timezones (e.g. "UTC").
       "yyyy-MM-dd HH:mm:ss Z zzz"
     ]
   }
-
-  /// Attempts to parse a string into a Date using primary and backup formats.
-  override func date(from string: String) -> Date? {
-    if let date = super.date(from: string) {
-      return date
-    }
-
-    // Attempt to remove weekday prefix (e.g., "Tues") for compatibility.
-    // See if we can lop off a text weekday, as DateFormatter does not
-    // handle these in full compliance with Unicode tr35-31. For example,
-    // "Tues, 6 November 2007 12:00:00 GMT" is rejected because of the "Tues",
-    // even though "Tues" is used as an example for EEE in tr35-31.
-    let trimmed = Self.trimRegEx.stringByReplacingMatches(
-      in: string,
-      options: [],
-      range: NSMakeRange(0, string.count),
-      withTemplate: "$1"
-    )
-
-    for format in permissiveDateFormats {
-      dateFormat = format
-      if let date = super.date(from: trimmed) {
-        return date
-      }
-    }
-    return nil
-  }
-
-  // MARK: Private
-
-  private static let trimRegEx = try! NSRegularExpression(pattern: "^[a-zA-Z]+, ([\\w :+-]+)$")
 }
 
 // MARK: - RFC1123 formatter
@@ -214,14 +240,21 @@ final class RFC1123DateFormatter: PermissiveDateFormatter, @unchecked Sendable {
   /// List of date formats supported for RFC1123.
   override var dateFormats: [String] {
     [
-      "EEE, dd MMM yyyy HH:mm:ss z"
+      // RFC 1123, named time zone (e.g. "GMT").
+      "EEE, dd MMM yyyy HH:mm:ss z",
+      // RFC 1123, numeric offset (e.g. "+0000", "-0800").
+      "EEE, dd MMM yyyy HH:mm:ss Z",
+      "EEE,dd MMM yyyy HH:mm:ss Z",
     ]
   }
 
   override var permissiveDateFormats: [String] {
     [
-      // Omits the time and timezone
-      "EEE, dd MMM yyyy"
+      // Omits the time and timezone.
+      "EEE, dd MMM yyyy",
+      // Numeric offset without seconds.
+      "EEE, dd MMM yyyy HH:mm Z",
+      "EEE,dd MMM yyyy HH:mm Z",
     ]
   }
 }
@@ -274,7 +307,7 @@ final class FeedDateFormatter: DateFormatter, @unchecked Sendable {
       return nil
     }
 
-    return switch spec {
+    let result = switch spec {
     case .iso8601:
       iso8601Formatter.date(from: string)
     case .rfc3339:
@@ -289,6 +322,12 @@ final class FeedDateFormatter: DateFormatter, @unchecked Sendable {
         rfc1123Formatter.date(from: string) ??
         iso8601Formatter.date(from: string)
     }
+      if result == nil {
+          print("Can not decode date for: ", string)
+      } else {
+          print("Decoded date for: ", string)
+      }
+      return result
   }
 
   /// Converts a Date to a string based on the given date specification.

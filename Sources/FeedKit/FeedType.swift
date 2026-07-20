@@ -93,18 +93,25 @@ extension FeedType: FeedInitializable {
   ///
   /// - Parameter data: A `Data` object representing a feed to be inspected.
   /// - Returns: A `FeedType` if the data matches a known feed format, otherwise `nil`.
-  public init(data: Data) throws {
-    guard data.count >= inspectionPrefixLength else {
+    public init(data: Data, prefixLength: Int? = nil) throws {
+    let inspectionLength = prefixLength ?? inspectionPrefixLength
+    guard data.count >= inspectionLength, inspectionLength <= 1024 else {
       throw FeedError.unknownFeedFormat
     }
 
     // Inspect only the first `inspectionPrefixLength` bytes. This helps improve performance
     // while still providing enough data to reliably detect the feed format.
-    let string: String = .init(decoding: data.prefix(inspectionPrefixLength), as: UTF8.self)
+    let string: String = .init(decoding: data.prefix(inspectionLength), as: UTF8.self)
 
     // Determine the feed type
     guard let feedType = FeedType.detectFeedType(from: string) else {
-      throw FeedError.unknownFeedFormat
+        do {
+            let type = try FeedType(data: data, prefixLength: inspectionLength * 2)
+            self = type
+            return
+        } catch {
+            throw FeedError.unknownFeedFormat
+        }
     }
     self = feedType
   }
