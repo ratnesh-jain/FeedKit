@@ -322,12 +322,7 @@ final class FeedDateFormatter: DateFormatter, @unchecked Sendable {
         rfc1123Formatter.date(from: string) ??
         iso8601Formatter.date(from: string)
     }
-      if result == nil {
-          print("Can not decode date for: ", string)
-      } else {
-          print("Decoded date for: ", string)
-      }
-      return result
+    return result
   }
 
   /// Converts a Date to a string based on the given date specification.
