@@ -153,6 +153,24 @@ class XMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
 
     // Get the current child element for decoding
     let node = nodes[currentIndex]
+
+    if decoder.faultTolerant {
+      // In fault-tolerant mode, try to decode and skip bad items
+      while currentIndex < (nodes.count) {
+        let currentNode = nodes[currentIndex]
+        if let value = try? decoder.decode(node: currentNode, as: T.self) {
+          currentIndex += 1
+          return value
+        }
+        currentIndex += 1
+      }
+      // All remaining items failed; throw so decodeIfPresent returns nil
+      throw DecodingError.valueNotFound(T.self, .init(
+        codingPath: codingPath,
+        debugDescription: "No items in fault-tolerant container decoded successfully."
+      ))
+    }
+
     let value = try decoder.decode(node: node, as: type)
     // Advance the index for the next decode call
     currentIndex += 1

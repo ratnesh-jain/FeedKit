@@ -208,6 +208,52 @@ extension JSONFeed: FeedInitializable {
     decoder.dateDecodingStrategy = .formatted(formatter)
     self = try decoder.decode(JSONFeed.self, from: data)
   }
+
+  /// Initializes a `JSONFeed` with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - data: The JSON feed data to parse.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the root JSON object cannot be parsed.
+  public init(data: Data, faultTolerant: Bool) throws {
+    guard faultTolerant else {
+      try self.init(data: data)
+      return
+    }
+
+    let formatter: RFC3339DateFormatter = .init()
+    let decoder: JSONDecoder = .init()
+    decoder.dateDecodingStrategy = .formatted(formatter)
+
+    // Decode root object, but with items temporarily removed so we can
+    // handle them separately for fault tolerance.
+    let root = try JSONSerialization.jsonObject(with: data)
+    guard var dict = root as? [String: Any] else {
+      throw DecodingError.dataCorrupted(.init(
+        codingPath: [],
+        debugDescription: "Root JSON value is not a dictionary."
+      ))
+    }
+
+    // Extract and remove items so we can decode them one-by-one.
+    let rawItems = dict.removeValue(forKey: "items") as? [[String: Any]] ?? []
+    let dataWithoutItems = try JSONSerialization.data(withJSONObject: dict)
+    var feed = try decoder.decode(JSONFeed.self, from: dataWithoutItems)
+
+    // Decode items individually, skipping any that fail.
+    var validItems: [JSONFeedItem] = []
+    for rawItem in rawItems {
+      let itemData = try JSONSerialization.data(withJSONObject: rawItem)
+      if let item = try? decoder.decode(JSONFeedItem.self, from: itemData) {
+        validItems.append(item)
+      }
+    }
+    feed.items = validItems.isEmpty ? nil : validItems
+    self = feed
+  }
 }
 
 public extension JSONFeed {

@@ -126,6 +126,107 @@ public extension FeedInitializable {
   init(data: Data) throws {
     self = try Self.decode(data: data)
   }
+
+  /// Initializes from data with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - data: The feed content as raw data.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the data cannot be parsed.
+  init(data: Data, faultTolerant: Bool) throws {
+    self = try Self.decode(data: data, faultTolerant: faultTolerant)
+  }
+
+  /// Initializes from a URL string with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - urlString: The URL string of the feed.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the URL string is invalid or loading fails.
+  init(urlString: String, faultTolerant: Bool) async throws {
+    guard let url = URL(string: urlString) else {
+      throw FeedError.invalidURLString
+    }
+    try await self.init(url: url, faultTolerant: faultTolerant)
+  }
+
+  /// Initializes from a URL with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: The URL of the feed.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the feed cannot be loaded or parsed.
+  init(url: URL, faultTolerant: Bool) async throws {
+    if url.isFileURL {
+      try self.init(fileURL: url, faultTolerant: faultTolerant)
+    } else {
+      try await self.init(remoteURL: url, faultTolerant: faultTolerant)
+    }
+  }
+
+  /// Initializes from a file URL with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: The local file URL of the feed.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the file cannot be read or parsed.
+  init(fileURL url: URL, faultTolerant: Bool) throws {
+    let data = try Data(contentsOf: url)
+    try self.init(data: data, faultTolerant: faultTolerant)
+  }
+
+  /// Initializes from a remote URL with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: The remote URL of the feed.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if fetching or parsing fails.
+  init(remoteURL url: URL, faultTolerant: Bool) async throws {
+    let session: URLSession = .shared
+    let (data, response) = try await session.data(from: url)
+
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw FeedError.invalidHttpResponse(statusCode: nil)
+    }
+
+    let statusCode = httpResponse.statusCode
+    guard (200 ... 299).contains(statusCode) else {
+      throw FeedError.invalidHttpResponse(statusCode: statusCode)
+    }
+
+    try self.init(data: data, faultTolerant: faultTolerant)
+  }
+
+  /// Initializes from a string with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - string: The feed content as a string.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: An error if the string cannot be converted to data or parsed.
+  init(string: String, faultTolerant: Bool) throws {
+    guard let data = string.data(using: .utf8) else {
+      throw FeedError.invalidUtf8String
+    }
+    try self.init(data: data, faultTolerant: faultTolerant)
+  }
 }
 
 // MARK: - Private
@@ -138,6 +239,19 @@ extension FeedInitializable {
     let decoder: XMLDecoder = .init()
     let formatter: FeedDateFormatter = .init(spec: .permissive)
     decoder.dateDecodingStrategy = .formatter(formatter)
+    return try decoder.decode(Self.self, from: data)
+  }
+
+  /// Helper method for decoding data into a model with fault tolerance.
+  /// - Parameters:
+  ///   - data: The raw feed data.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Returns: A parsed feed model conforming to `FeedInitializable`.
+  private static func decode(data: Data, faultTolerant: Bool) throws -> Self {
+    let decoder: XMLDecoder = .init()
+    let formatter: FeedDateFormatter = .init(spec: .permissive)
+    decoder.dateDecodingStrategy = .formatter(formatter)
+    decoder.faultTolerant = faultTolerant
     return try decoder.decode(Self.self, from: data)
   }
 }
