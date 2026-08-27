@@ -31,8 +31,12 @@ public class XMLDecoder {
 
   // MARK: Public
 
-  /// The strategy for decoding `Date` values from XML nodes.
+  // The strategy for decoding `Date` values from XML nodes.
   public var dateDecodingStrategy: XMLDateDecodingStrategy = .deferredToDate
+
+  // When `true`, the decoder skips array elements that fail to decode
+  // instead of propagating the error.
+  public var faultTolerant: Bool = false
 
   public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     let reader: XMLReader = .init(data: data)
@@ -58,6 +62,7 @@ public class XMLDecoder {
   func decode<T: Decodable>(_: T.Type, from node: XMLNode) throws -> T {
     let decoder: _XMLDecoder = .init(node: node, codingPath: [])
     decoder.dateDecodingStrategy = dateDecodingStrategy
+    decoder.faultTolerant = faultTolerant
     return try T(from: decoder)
   }
 }
@@ -83,10 +88,12 @@ class _XMLDecoder: Decoder {
   var stack: XMLStack
   /// The path of coding keys used to locate a value in the decoding process.
   var codingPath: [any CodingKey]
-  /// User-defined contextual information for the decoding process.
+  // User-defined contextual information for the decoding process.
   var userInfo: [CodingUserInfoKey: Any]
-  /// The strategy for decoding `Date` values from XML nodes.
+  // The strategy for decoding `Date` values from XML nodes.
   var dateDecodingStrategy: XMLDateDecodingStrategy = .deferredToDate
+  // When `true`, the decoder skips array elements that fail to decode.
+  var faultTolerant: Bool = false
 
   /// Returns a keyed decoding container for the current XML element.
   /// - Parameter type: The type of the coding key.

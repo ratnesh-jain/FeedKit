@@ -93,6 +93,23 @@ extension Feed: FeedInitializable {
     try await self.init(url: url)
   }
 
+  /// Initializes a `Feed` from a URL string with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - urlString: A valid URL string pointing to a feed.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: `FeedError.invalidURLString` if the URL string is invalid, or other
+  ///           parsing errors if the feed content cannot be processed.
+  public init(urlString: String, faultTolerant: Bool) async throws {
+    guard let url = URL(string: urlString) else {
+      throw FeedError.invalidURLString
+    }
+    try await self.init(url: url, faultTolerant: faultTolerant)
+  }
+
   /// Initializes a `Feed` by parsing content from the specified URL.
   ///
   /// This initializer automatically handles both local file URLs and remote URLs.
@@ -107,6 +124,24 @@ extension Feed: FeedInitializable {
     }
   }
 
+  /// Initializes a `Feed` from a URL with fault-tolerant decoding.
+  ///
+  /// This initializer automatically handles both local file URLs and remote URLs.
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: The URL pointing to the feed content.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: Various errors depending on whether the URL is local or remote.
+  public init(url: URL, faultTolerant: Bool) async throws {
+    if url.isFileURL {
+      try self.init(fileURL: url, faultTolerant: faultTolerant)
+    } else {
+      try await self.init(remoteURL: url, faultTolerant: faultTolerant)
+    }
+  }
+
   /// Initializes a `Feed` by parsing content from a local file URL.
   ///
   /// - Parameter url: A file URL pointing to the feed content.
@@ -114,6 +149,20 @@ extension Feed: FeedInitializable {
   public init(fileURL url: URL) throws {
     let data = try Data(contentsOf: url)
     try self.init(data: data)
+  }
+
+  /// Initializes a `Feed` from a local file URL with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: A file URL pointing to the feed content.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: File reading errors or parsing errors if the content is invalid.
+  public init(fileURL url: URL, faultTolerant: Bool) throws {
+    let data = try Data(contentsOf: url)
+    try self.init(data: data, faultTolerant: faultTolerant)
   }
 
   /// Initializes a `Feed` by downloading and parsing content from a remote URL.
@@ -137,6 +186,32 @@ extension Feed: FeedInitializable {
     try self.init(data: data)
   }
 
+  /// Initializes a `Feed` from a remote URL with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - url: A remote URL pointing to the feed content.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: Network errors, HTTP errors, or parsing errors if the download
+  ///           fails or the content is invalid.
+  public init(remoteURL url: URL, faultTolerant: Bool) async throws {
+    let session: URLSession = .shared
+    let (data, response) = try await session.data(from: url)
+
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw FeedError.invalidHttpResponse(statusCode: nil)
+    }
+
+    let statusCode = httpResponse.statusCode
+    guard (200 ... 299).contains(statusCode) else {
+      throw FeedError.invalidHttpResponse(statusCode: statusCode)
+    }
+
+    try self.init(data: data, faultTolerant: faultTolerant)
+  }
+
   /// Initializes a `Feed` by parsing the provided string content.
   ///
   /// - Parameter string: A string containing the feed content.
@@ -147,6 +222,23 @@ extension Feed: FeedInitializable {
       throw FeedError.invalidUtf8String
     }
     try self.init(data: data)
+  }
+
+  /// Initializes a `Feed` from a string with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - string: A string containing the feed content.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: `FeedError` if the string cannot be converted to data or if
+  ///           parsing fails.
+  public init(string: String, faultTolerant: Bool) throws {
+    guard let data = string.data(using: .utf8) else {
+      throw FeedError.invalidUtf8String
+    }
+    try self.init(data: data, faultTolerant: faultTolerant)
   }
 
   /// Initializes a `Feed` by parsing the provided raw data.
@@ -172,6 +264,34 @@ extension Feed: FeedInitializable {
 
     case .json:
       let feed = try JSONFeed(data: data)
+      self = .json(feed)
+    }
+  }
+
+  /// Initializes a `Feed` with fault-tolerant decoding.
+  ///
+  /// When `faultTolerant` is `true`, individual items that fail to decode
+  /// are skipped rather than causing the entire feed to fail.
+  ///
+  /// - Parameters:
+  ///   - data: The raw feed data to parse.
+  ///   - faultTolerant: Whether to skip items that fail to decode.
+  /// - Throws: `FeedError.unknownFeedFormat` if the feed type cannot be determined or
+  ///           if parsing fails.
+  public init(data: Data, faultTolerant: Bool) throws {
+    let feedType = try FeedType(data: data)
+
+    switch feedType {
+    case .atom:
+      let feed = try AtomFeed(data: data, faultTolerant: faultTolerant)
+      self = .atom(feed)
+
+    case .rss:
+      let feed = try RSSFeed(data: data, faultTolerant: faultTolerant)
+      self = .rss(feed)
+
+    case .json:
+      let feed = try JSONFeed(data: data, faultTolerant: faultTolerant)
       self = .json(feed)
     }
   }
